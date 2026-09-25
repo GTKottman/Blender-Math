@@ -1,0 +1,15 @@
+schema_version = "1.0.0"
+
+id = "blender_math_bridge"
+version = "0.1.0"
+name = "Blender Math Bridge (MCP)"
+tagline = "Lets an AI typeset LaTeX and draw exact math through MCP"
+maintainer = "Blender-Math contributors"
+type = "add-on"
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+category = "Interface"
+
+[permissions]
+network = "Listens on localhost for commands from the blender-math MCP server"
+files = "Writes temporary PNG files when rendering previews"

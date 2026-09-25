@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "blender-math-mcp"
+version = "0.1.0"
+description = "MCP server that lets an AI typeset LaTeX and draw mathematically exact graphs in Blender"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.2",
+    "sympy>=1.12",
+    "numpy>=1.24",
+    "matplotlib>=3.7",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+blender-math-mcp = "blender_math_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/blender_math_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "blender_addon"]
