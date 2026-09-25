@@ -61,7 +61,7 @@ def line_objects(c: Construction, node: Node, geom, fr: Frame, extent: str = "li
 
 
 def line_equation_latex(geom) -> str:
-    a, b, cc = (sp.nsimplify(v) for v in geom.coefficients)
+    a, b, cc = (sp.nsimplify(v) for v in sp.Line2D(geom.p1, geom.p2).coefficients)  # rays/segments too
     if b == 0:
         return f"x = {nice_latex(sp.simplify(-cc / a))}"
     return f"y = {nice_latex(sp.expand(-(a * sp.Symbol('x') + cc) / b))}"

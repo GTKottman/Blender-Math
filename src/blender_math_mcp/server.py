@@ -98,6 +98,11 @@ def _tool(fn):
             raise ToolError(f"REFUSED (nothing was drawn or changed): {exc}") from exc
         except (BlenderError, TypesetError, ex.ExpressionError, ValueError, KeyError, TypeError) as exc:
             raise ToolError(str(exc)) from exc
+        except ToolError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - never return an empty error to the AI
+            raise ToolError(f"Internal error ({type(exc).__name__}: {exc}). This is a bug in blender-math; "
+                            "nothing was changed. Try a different construction.") from exc
 
     return mcp.tool()(wrapper)
 
@@ -237,7 +242,8 @@ def delete_object(name: str) -> dict:
 
 @_tool
 def clear_scene() -> dict:
-    """Delete every math object and the whole construction graph."""
+    """Delete every math object and the whole construction graph. Camera, theme and render settings are kept:
+    call setup_scene afterwards when switching between 2D and 3D."""
     return studio().clear()
 
 

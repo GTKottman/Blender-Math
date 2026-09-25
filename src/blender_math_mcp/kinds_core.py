@@ -7,6 +7,7 @@ import re
 
 import numpy as np
 import sympy as sp
+from sympy.geometry.line import LinearEntity
 
 from . import expressions as ex
 from . import geometry as geo
@@ -496,15 +497,15 @@ def _intersection_points(c: Construction, a: str, b: str, fr: Frame) -> list[tup
     f = lam.expr
     if isinstance(g, sp.Circle):
         eq = (X - g.center.x) ** 2 + (f - g.center.y) ** 2 - g.radius ** 2
-    elif isinstance(g, sp.LinearEntity):
-        A_, B_, C_ = g.coefficients
+    elif isinstance(g, LinearEntity):
+        A_, B_, C_ = sp.Line2D(g.p1, g.p2).coefficients  # supporting line; segments/rays filtered below
         eq = A_ * X + B_ * f + C_
     else:
         raise MathRefusal(f"Cannot intersect a function with {gnode.kind}.")
     out = []
     for r, exact, method in kp.zeros(sp.simplify(eq), X, lo, hi):
         y0 = sp.simplify(f.subs(X, r)) if exact else f.subs(X, r).evalf(30)
-        if isinstance(g, sp.LinearEntity) and not isinstance(g, sp.Line2D):
+        if isinstance(g, LinearEntity) and not isinstance(g, sp.Line2D):
             # segment / ray: keep only points that lie on it
             if exact:
                 if not g.contains(sp.Point2D(r, y0)):

@@ -462,6 +462,15 @@ def cmd_setup_scene(params):
         cam = bpy.data.objects.new("MathCamera", bpy.data.cameras.new("MathCamera"))
         scene.collection.objects.link(cam)
         scene.camera = cam
+    # A fresh setup owns the camera: drop orbit rigs and camera animation from earlier scenes.
+    cam.animation_data_clear()
+    cam.data.animation_data_clear()
+    if cam.parent is not None:
+        cam.parent = None
+        cam.matrix_parent_inverse = mathutils.Matrix.Identity(4)
+    piv = bpy.data.objects.get("MathCameraPivot")
+    if piv is not None:
+        bpy.data.objects.remove(piv, do_unlink=True)
     center = params.get("center", [0, 0, 0])
     if mode == "2d":
         cam.data.type = "ORTHO"

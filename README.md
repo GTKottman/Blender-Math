@@ -140,6 +140,16 @@ Environment variables:
 
 To check the setup without an AI, run `python examples/showcase.py` while the Blender server is running.
 
+### 4. Install the skill (recommended)
+
+The repository ships a Claude skill, `.claude/skills/blender-math/`, that teaches the AI how to use these tools well: the graph model, the workflow (build, preview, fix), how to handle refusals, and tested recipes for every topic and for animation. Claude Code loads it automatically inside this repository. To use it everywhere, copy it to your user skills:
+
+```bash
+cp -r .claude/skills/blender-math ~/.claude/skills/
+```
+
+`python scripts/check_skill_recipes.py` executes every recipe in the skill against Blender, so the examples are known to work.
+
 ## Example prompts
 
 - *"Graph f(x) = x³/6 − x with its extrema labelled exactly, the tangent at x = 3, and the area between f and the x-axis on [0, √6]. Then animate: axes, draw f, show the tangent, write the area value."*

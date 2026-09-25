@@ -60,6 +60,8 @@ class Studio:
                           camera_location=[float(v) for v in camera_location] if camera_location else None,
                           engine=engine)
         self.mode = mode
+        # the new camera replaces any animated camera moves recorded earlier
+        self.anim.history = [h for h in self.anim.history if not h["action"].startswith("camera_")]
         aspect = resolution[0] / resolution[1]
         if mode == "2d":
             self.r.view_box = (center[0] - view_width / 2, center[1] - view_width / aspect / 2,
@@ -186,6 +188,7 @@ class Studio:
     def clear(self) -> dict:
         self.c.clear()
         self.anim.cursor = self.anim.end = 0.0
+        self.anim.history.clear()  # otherwise a later graph update would replay old animations
         return {"cleared": True}
 
 

@@ -302,3 +302,41 @@ def test_animation_survives_graph_updates(studio):
     assert f.data.animation_data and f.data.animation_data.action
     bpy.context.scene.frame_set(1)
     assert f.data.bevel_factor_end == pytest.approx(0.0)
+
+
+def test_perpendicular_line_and_function_line_intersection(studio):
+    # Regression: sympy has no top-level LinearEntity; both paths used it.
+    studio.add("line", "l1", {"equation": "2x + 3y = 6"})
+    studio.add("point", "P", {"coords": [-3, -2]})
+    studio.add("line", "l2", {"perpendicular": "l1", "through": "P"})
+    studio.add("point", "F", {"intersection": ["l1", "l2"]})
+    assert studio.c.describe("F")["coordinates"] == ["-3/13", "28/13"]  # P + (18/13)(2, 3)
+    studio.add("function", "f", {"expression": "x^2"})
+    studio.add("segment", "sg", {"points": [[-3, 1], [3, 1]]})
+    studio.add("point", "Q", {"intersection": ["f", "sg"], "index": 1})
+    assert studio.c.describe("Q")["coordinates"] == ["1", "1"]
+
+
+def test_ray_describe_and_label(studio):
+    studio.add("point", "A", {"coords": [0, 0]})
+    studio.add("point", "B", {"coords": [1, 1]})
+    studio.add("ray", "r", {"from": "A", "through": "B"}, {"label": True})
+    assert studio.c.describe("r")["equation"] == "y = x"
+
+
+def test_setup_scene_resets_orbited_camera(studio):
+    import bpy
+
+    studio.setup_scene("3d", engine="cycles", resolution=[320, 180])
+    studio.add("surface", "S", {"expression": "x^2 - y^2", "resolution": 8})
+    studio.anim.configure(fps=10, reset=True)
+    studio.anim.play("camera_orbit", [], 1.0, degrees=90)
+    bpy.context.scene.frame_set(11)
+    studio.clear()
+    studio.setup_scene("2d", engine="cycles", resolution=[320, 180])
+    studio.add("function", "f", {"expression": "x"})
+    studio.c.update("f", {"expression": "2*x"})  # graph update replays animation history
+    cam = bpy.context.scene.camera
+    bpy.context.view_layer.update()
+    assert cam.parent is None and bpy.data.objects.get("MathCameraPivot") is None
+    assert tuple(round(v, 9) for v in cam.matrix_world.to_euler()) == (0, 0, 0)  # looking straight down

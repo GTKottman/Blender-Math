@@ -6,6 +6,7 @@ import math
 
 import numpy as np
 import sympy as sp
+from sympy.geometry.line import LinearEntity
 
 from . import geometry as geo
 from .construction import Kind, X, coord_latex, fnum, nice_latex, register
@@ -38,7 +39,7 @@ def _is_number(s: str) -> bool:
 def _line_geom(c, ref):
     n = c.nodes.get(ref)
     g = n.data.get("geom") if n else None
-    if not isinstance(g, sp.LinearEntity):
+    if not isinstance(g, LinearEntity):
         raise MathRefusal(f"{ref!r} is not a line, ray or segment.")
     return g
 
