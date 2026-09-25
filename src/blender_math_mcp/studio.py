@@ -27,6 +27,7 @@ class Studio:
         self.r = Renderer(transport, backend=backend, theme=theme)
         self.c = Construction(self.r)
         self.anim = Animator(self.c)
+        self.c.after_redraw = self.anim.replay
         self.mode = "2d"
 
     # ------------------------------------------------------------------ status / scene
@@ -65,6 +66,7 @@ class Studio:
                                center[0] + view_width / 2, center[1] + view_width / aspect / 2)
         if redraw:
             self.c.redraw_all()
+            self.anim.replay()
         self.c.save()
         res.update({"theme": self.r.theme.name, "view_box": self.r.view_box,
                     "note": "Math origin (0,0) of default axes is the world origin; 1 math unit = 1 Blender unit "

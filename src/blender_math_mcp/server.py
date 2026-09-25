@@ -49,7 +49,7 @@ Correctness rules (the server enforces them):
   with true gaps at poles/jumps and exact clipping at the axes.
 
 Coordinates: the default axes put math (0,0) at the world origin with 1 math unit = 1 Blender unit;
-the 2D view shows x in [-8, 8], y in [-4.5, 4.5]. Axes are created automatically if missing.
+the 2D view shows x in [-8, 8], y in [-4.5, 4.5]; default axes span x in [-7, 7], y in [-3.6, 3.6]. Axes are created automatically if missing.
 Reference names in expressions: parameters `a`, functions `f(x)`, derivatives `f'(x)`, `f''(2)`,
 point coordinates `A_x`, `A_y`, scalar results (lengths, areas, angles) by object name.
 In LaTeX of add_text, `\\val{expr}` inserts the exact value, `\\approx{expr}` a decimal.
@@ -255,7 +255,7 @@ def set_parameter(name: str, value: Num, min: Num | None = None, max: Num | None
 
 
 @_tool
-def create_axes(name: str = "axes", x_range: list[Num] = [-7.5, 7.5], y_range: list[Num] = [-4, 4],  # noqa: B006
+def create_axes(name: str = "axes", x_range: list[Num] = [-7, 7], y_range: list[Num] = [-3.6, 3.6],  # noqa: B006
                 z_range: list[Num] | None = None, scale: Num | list[Num] | None = 1, location: Vec = [0, 0, 0],  # noqa: B006
                 tick_step: Num | list[Num] | None = None, tick_style: str | list[str] = "decimal",
                 x_label: str | None = "x", y_label: str | None = "y", z_label: str | None = "z",

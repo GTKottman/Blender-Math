@@ -347,8 +347,8 @@ class Area(Kind):
             mid = (fnum(d["a"]) + fnum(d["b"])) / 2
             ym = (fnum(d["upper"].subs(X, mid)) + fnum(d["lower"].subs(X, mid))) / 2
             ym = float(np.clip(ym, fr.lo[1], fr.hi[1]))
-            objs += c.r.text(f"{node.name}:label", lab, fr.to_local([mid, ym], "label")[0], fr, node.name,
-                             size=node.style.get("label_size", 0.42), color=c.r.theme.text)
+            objs += c.r.auto_label(f"{node.name}:label", lab, fr.to_local([mid, ym], "label")[0], fr, node.name,
+                                   size=node.style.get("label_size", 0.42), color=c.r.theme.text, gap=0.0)
         return objs
 
     def describe(self, node):

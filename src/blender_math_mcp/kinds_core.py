@@ -197,8 +197,8 @@ class Axes(Kind):
 
     def compute(self, c, node):
         s = node.spec
-        xr = [fnum(c.value(v)) for v in s.get("x_range", [-7.5, 7.5])]
-        yr = [fnum(c.value(v)) for v in s.get("y_range", [-4, 4])]
+        xr = [fnum(c.value(v)) for v in s.get("x_range", [-7, 7])]
+        yr = [fnum(c.value(v)) for v in s.get("y_range", [-3.6, 3.6])]
         zr = [fnum(c.value(v)) for v in s["z_range"]] if s.get("z_range") else None
         for r in (xr, yr, zr):
             if r is not None and not r[1] > r[0]:

@@ -39,6 +39,8 @@ class Animator:
         self.cursor = 0.0  # seconds
         self.end = 0.0
         self._helpers = 0
+        self.history: list[dict] = []  # every play() call, replayed when the graph is redrawn
+        self._replaying = False
 
     # ------------------------------------------------------------------ helpers
 
@@ -85,10 +87,35 @@ class Animator:
         if reset:
             self.r.send("clear_animation")
             self.cursor = self.end = 0.0
+            self.history.clear()
         if fps:
             self.fps = int(fps)
         self.r.send("timeline", fps=self.fps, frame_start=1, frame_end=max(self.frame(self.end + 0.5), 2))
         return self.state()
+
+    def replay(self) -> list[str]:
+        """Rebuild all animation after objects were redrawn (keyframes live on the Blender objects)."""
+        if not self.history or self._replaying:
+            return []
+        skipped = []
+        self._replaying = True
+        try:
+            self.r.send("clear_animation")
+            cursor = self.cursor
+            self.end = 0.0
+            for h in self.history:
+                if any(t not in self.c.nodes for t in h["targets"]):
+                    skipped.append(f"{h['action']} {h['targets']} (object deleted)")
+                    continue
+                try:
+                    self.play(h["action"], h["targets"], h["duration"], h["start"], h["lag"], h["easing"],
+                              h["advance"], **h["opts"])
+                except MathRefusal as exc:
+                    skipped.append(f"{h['action']} {h['targets']}: {exc}")
+            self.cursor = cursor
+        finally:
+            self._replaying = False
+        return skipped
 
     def state(self) -> dict:
         return {"fps": self.fps, "cursor_seconds": self.cursor, "end_seconds": self.end,
@@ -113,6 +140,9 @@ class Animator:
         if fn is None:
             raise MathRefusal(f"Unknown animation {action!r}.")
         info = fn(targets, t0, t1, lag=lag, interp=self._interp(easing), **opts) or {}
+        if not self._replaying:
+            self.history.append({"action": action, "targets": targets, "duration": duration, "start": t0,
+                                 "lag": lag, "easing": easing, "advance": advance, "opts": opts})
         self._advance(t1 + lag * max(0, len(targets) - 1), advance)
         return {"action": action, "targets": targets, "start_seconds": t0, "end_seconds": t1,
                 "frames": [self.frame(t0), self.frame(t1)], **info, "timeline": self.state()}

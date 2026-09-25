@@ -131,7 +131,7 @@ def test_cubic_polynomial_drawn_exactly(studio):
 
 def test_tan_is_broken_at_poles(studio):
     studio.add("function", "f", {"expression": "tan(x)"})
-    assert len(objects()["f"].data.splines) == 5  # [-7.5, 7.5] contains 4 poles
+    assert len(objects()["f"].data.splines) == 5  # [-7, 7] contains 4 poles of tan
 
 
 def test_intersection_point_exact(studio):
@@ -288,3 +288,17 @@ def test_metadata_links_objects_to_nodes(studio):
     studio.add("function", "f", {"expression": "x", }, {"label": True})
     for name in studio.c.nodes["f"].objects:
         assert json.loads(objects()[name]["math_meta"])["node"] == "f"
+
+
+def test_animation_survives_graph_updates(studio):
+    import bpy
+
+    studio.add("parameter", "a", {"value": "1"})
+    studio.add("function", "f", {"expression": "a*x"})
+    studio.anim.configure(fps=10, reset=True)
+    studio.anim.play("create", ["f"], 1.0)
+    studio.c.update("a", {"value": "2"})  # f is redrawn -> its draw-on keyframes are rebuilt
+    f = objects()["f"]
+    assert f.data.animation_data and f.data.animation_data.action
+    bpy.context.scene.frame_set(1)
+    assert f.data.bevel_factor_end == pytest.approx(0.0)

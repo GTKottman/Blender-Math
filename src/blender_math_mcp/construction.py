@@ -126,6 +126,7 @@ class Construction:
         self.theme_name = renderer.theme.name
         self._color_index = 0
         self.loaded = False
+        self.after_redraw: Callable[[], Any] | None = None  # e.g. replay animations
 
     # ------------------------------------------------------------------ environment
 
@@ -244,7 +245,7 @@ class Construction:
             return names[-1]
         name = "axes" if "axes" not in self.nodes else f"axes{dims}d"
         if dims == 2:
-            self.add("axes", name, {"x_range": [-7.5, 7.5], "y_range": [-4, 4], "scale": 1})
+            self.add("axes", name, {"x_range": [-7, 7], "y_range": [-3.6, 3.6], "scale": 1})
         else:
             self.add("axes", name, {"x_range": [-3, 3], "y_range": [-3, 3], "z_range": [-2, 2]})
         return name
@@ -331,6 +332,8 @@ class Construction:
             self.r.forget(n)
         self.r.relayout()
         self.save()
+        if self.after_redraw:
+            self.after_redraw()
         return doomed
 
     def clear(self) -> None:
@@ -388,6 +391,8 @@ class Construction:
             n.objects = [] if n.style.get("visible") is False else KINDS[n.kind].draw(self, n)
         self.r.relayout()
         self.save()
+        if self.after_redraw and any(backup.get(n.name) is not None for n in nodes):
+            self.after_redraw()
 
     def redraw_all(self) -> None:
         for n in self.nodes.values():

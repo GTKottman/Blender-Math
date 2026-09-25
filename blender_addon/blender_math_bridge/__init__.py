@@ -505,6 +505,37 @@ def _viewport_to_camera():
                         space.shading.use_scene_lights = True
 
 
+def _world_points(objs, max_points=20000):
+    """Evaluated vertex positions (world space) of the objects, subsampled to max_points."""
+    import numpy as np
+
+    deps = bpy.context.evaluated_depsgraph_get()
+    chunks = []
+    for o in objs:
+        if o.type not in ("MESH", "CURVE", "FONT", "SURFACE"):
+            continue
+        ev = o.evaluated_get(deps)
+        try:
+            me = ev.to_mesh()
+        except RuntimeError:
+            continue
+        try:
+            n = len(me.vertices)
+            if n:
+                co = np.empty(n * 3)
+                me.vertices.foreach_get("co", co)
+                m = np.array(ev.matrix_world)
+                chunks.append(co.reshape(-1, 3) @ m[:3, :3].T + m[:3, 3])
+        finally:
+            ev.to_mesh_clear()
+    if not chunks:
+        return None
+    pts = np.concatenate(chunks)
+    if len(pts) > max_points:
+        pts = pts[np.linspace(0, len(pts) - 1, max_points).astype(int)]
+    return pts
+
+
 def _bbox(objs):
     """World-space bounds of the evaluated geometry.
 
@@ -578,12 +609,14 @@ def cmd_frame(params):
         if aspect < 1:  # portrait: AUTO fit applies the angle to the height
             ax, ay = ay, ax
         tx, ty = math.tan(ax / 2) / (1 + 2 * margin), math.tan(ay / 2) / (1 + 2 * margin)
-        dist = 0.0
-        for cx in (lo.x, hi.x):
-            for cy in (lo.y, hi.y):
-                for cz in (lo.z, hi.z):
-                    c = inv @ (mathutils.Vector((cx, cy, cz)) - center)  # camera-space offset
-                    dist = max(dist, abs(c.x) / tx + c.z, abs(c.y) / ty + c.z)
+        # Tight fit on the actual geometry: each vertex must be inside the frustum.
+        import numpy as np
+
+        pts = _world_points(objs)
+        R = np.array(inv.to_matrix())
+        cam_pts = (pts - np.array(center)) @ R.T  # camera-space offsets from the target
+        # re-center the view on the projected extent, then find the distance
+        dist = float(np.max(np.maximum(np.abs(cam_pts[:, 0]) / tx, np.abs(cam_pts[:, 1]) / ty) + cam_pts[:, 2]))
         cam.location = center - forward * max(dist, cam.data.clip_start * 2)
     out = {"center": list(center), "size": list(size), "camera": cam.name, "aspect": aspect}
     if cam.data.type == "ORTHO":

@@ -1,4 +1,4 @@
-"""Draw a small showcase in a running Blender (no AI needed) to check the setup.
+"""Build a small live construction in a running Blender (no AI needed) to check the setup.
 
 1. In Blender: enable the "Blender Math Bridge" add-on and press
    "Start Math MCP server" (3D View > Sidebar (N) > Math MCP).
@@ -6,19 +6,29 @@
 """
 
 from blender_math_mcp.blender_client import BlenderConnection
-from blender_math_mcp.studio import MathStudio
+from blender_math_mcp.studio import Studio
 
-s = MathStudio(BlenderConnection())
+s = Studio(BlenderConnection())
 print(s.status())
+s.clear()
+s.setup_scene("2d", theme="dark")
 
-s._send("delete", all_math=True)
-s.setup_scene("2d", background="#101418")
-ax = s.create_axes(x_range=[-6.5, 6.5], y_range=[-3, 3], tick_style="pi", grid=True)["axes"]
-s.plot_function("tan(x)", axes=ax, color="math_blue", label=r"y = \tan x")
-s.plot_function("sin(x)", axes=ax, color="math_yellow")
-area = s.shade_region("sin(x)", x_range=[0, "pi"], axes=ax, color="math_yellow", opacity=0.3)
-s.draw_point([1.5707963267948966, 1], axes=ax, label=r"\left(\frac{\pi}{2}, 1\right)")
-s.render_latex(rf"\int_0^{{\pi}} \sin x\,dx = {area['area_latex']}", location=[-4.5, 3.3, 0], size=0.55,
-               color="math_yellow")
-s._send("frame", margin=0.04)
-print("Done - look through the camera (Numpad 0).")
+# A dependency graph: change `a` later and everything below updates.
+s.add("parameter", "a", {"value": "1/6"})
+s.add("function", "f", {"expression": "a*x^3 - x"}, {"label": True})
+print(s.find_points("extrema", "f"))  # exact: (-sqrt(2), 2*sqrt(2)/3), (sqrt(2), -2*sqrt(2)/3)
+s.add("point", "A", {"on": "f", "x": "3"})
+s.add("tangent", "tg", {"function": "f", "point": "A"}, {"label": True})
+s.add("area", "S", {"upper": "f", "a": "0", "b": "sqrt(6)"}, {"label": True})
+s.add("text", "T", {"latex": r"f'(3) = \val{f'(A_x)}", "at": [4, -3]})
+s.frame_view()
+
+# Animate it and write a video next to this script.
+s.anim.configure(fps=30, reset=True)
+s.anim.play("create", ["axes"], 1.0)
+s.anim.play("create", ["f"], 1.5)
+s.anim.play("create", ["A", "tg"], 1.0, lag=0.3)
+s.anim.play("write", ["T"], 1.0)
+s.c.update("a", {"value": "1/4"})  # the whole graph recomputes exactly
+print(s.c.describe("tg")["equation"])
+print("Done - look through the camera (Numpad 0) and press Space to play.")
