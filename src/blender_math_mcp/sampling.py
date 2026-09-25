@@ -125,8 +125,8 @@ def _inside(P: np.ndarray, lo: np.ndarray, hi: np.ndarray, eps: float = 0.0) -> 
     return np.all((P >= lo - eps) & (P <= hi + eps), axis=-1)
 
 
-def _boundary_point(F: CurveFn, t_in: float, t_out: float, lo, hi, iters: int = 60) -> np.ndarray:
-    """Point where the curve leaves the box, by bisection on the parameter."""
+def _boundary_point(F: CurveFn, t_in: float, t_out: float, lo, hi, iters: int = 60) -> tuple[float, np.ndarray]:
+    """``(t, point)`` where the curve leaves the box, by bisection on the parameter."""
     a, b = t_in, t_out
     for _ in range(iters):
         m = 0.5 * (a + b)
@@ -143,7 +143,7 @@ def _boundary_point(F: CurveFn, t_in: float, t_out: float, lo, hi, iters: int = 
             p[d] = hi[d]
         elif np.isfinite(pb[d]) and pb[d] < lo[d]:
             p[d] = lo[d]
-    return p
+    return a, p
 
 
 def _beyond_same_wall(a: np.ndarray, b: np.ndarray, lo: np.ndarray, hi: np.ndarray) -> bool:
@@ -184,29 +184,42 @@ def _densify_crossings(t, P, F, lo, hi, max_depth: int = 40):
     return t2[order], P2[order]
 
 
+def clip_runs_t(
+    runs: list[tuple[np.ndarray, np.ndarray]], F: CurveFn, lo: Sequence[float], hi: Sequence[float]
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Clip each ``(t, P)`` run to the box [lo, hi] with exact crossing points (keeps parameters)."""
+    lo_, hi_ = np.asarray(lo, float), np.asarray(hi, float)
+    out: list[tuple[np.ndarray, np.ndarray]] = []
+    for t, P in runs:
+        t, P = _densify_crossings(t, P, F, lo_, hi_)
+        ins = _inside(P, lo_, hi_, eps=1e-12)
+        ct: list[float] = []
+        cp: list[np.ndarray] = []
+        for i in range(len(t)):
+            if ins[i]:
+                if not cp and i > 0:  # entering
+                    tb, pb = _boundary_point(F, t[i], t[i - 1], lo_, hi_)
+                    ct.append(tb)
+                    cp.append(pb)
+                ct.append(t[i])
+                cp.append(P[i])
+            else:
+                if cp:  # leaving
+                    tb, pb = _boundary_point(F, t[i - 1], t[i], lo_, hi_)
+                    ct.append(tb)
+                    cp.append(pb)
+                    out.append((np.array(ct), np.array(cp)))
+                    ct, cp = [], []
+        if len(cp) >= 2:
+            out.append((np.array(ct), np.array(cp)))
+    return [(a, b) for a, b in out if len(b) >= 2]
+
+
 def clip_runs(
     runs: list[tuple[np.ndarray, np.ndarray]], F: CurveFn, lo: Sequence[float], hi: Sequence[float]
 ) -> list[np.ndarray]:
     """Clip each run to the axis-aligned box [lo, hi], with exact crossing points."""
-    lo_, hi_ = np.asarray(lo, float), np.asarray(hi, float)
-    out: list[np.ndarray] = []
-    for t, P in runs:
-        t, P = _densify_crossings(t, P, F, lo_, hi_)
-        ins = _inside(P, lo_, hi_, eps=1e-12)
-        cur: list[np.ndarray] = []
-        for i in range(len(t)):
-            if ins[i]:
-                if not cur and i > 0:  # entering
-                    cur.append(_boundary_point(F, t[i], t[i - 1], lo_, hi_))
-                cur.append(P[i])
-            else:
-                if cur:  # leaving
-                    cur.append(_boundary_point(F, t[i - 1], t[i], lo_, hi_))
-                    out.append(np.array(cur))
-                    cur = []
-        if len(cur) >= 2:
-            out.append(np.array(cur))
-    return [r for r in out if len(r) >= 2]
+    return [P for _, P in clip_runs_t(runs, F, lo, hi)]
 
 
 def simplify_polyline(P: np.ndarray, s: np.ndarray, tol: float) -> np.ndarray:
@@ -230,6 +243,23 @@ def simplify_polyline(P: np.ndarray, s: np.ndarray, tol: float) -> np.ndarray:
         else:
             last = i
     return P[keep]
+
+
+def sample_curve_t(
+    F: CurveFn,
+    t0: float,
+    t1: float,
+    scale: Sequence[float],
+    tol: float,
+    lo: Sequence[float] | None = None,
+    hi: Sequence[float] | None = None,
+) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Like ``sample_curve`` but returns ``(t, P)`` runs (unsimplified) for spline fitting."""
+    t, P, brk = adaptive_sample(F, t0, t1, scale, tol, lo, hi)
+    runs = split_polylines(t, P, brk)
+    if lo is not None and hi is not None:
+        return clip_runs_t(runs, F, lo, hi)
+    return runs
 
 
 def sample_curve(

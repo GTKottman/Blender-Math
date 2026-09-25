@@ -43,7 +43,9 @@ _ALLOWED = {
     ).split()
     if hasattr(sp, name)
 }
-_ALLOWED.update({"e": sp.E, "abs": sp.Abs, "ln": sp.log, "inf": sp.oo, "infinity": sp.oo})
+_ALLOWED.update({"e": sp.E, "abs": sp.Abs, "ln": sp.log, "inf": sp.oo, "infinity": sp.oo,
+                 # real roots (x^(1/3) is the principal root, undefined for x < 0)
+                 "cbrt": lambda a: sp.real_root(a, 3), "root": sp.real_root, "real_root": sp.real_root})
 
 # parse_expr needs a handful of SymPy constructors in its global namespace.
 _BASE_GLOBALS = {name: getattr(sp, name) for name in ("Symbol", "Integer", "Float", "Rational", "Function",
@@ -61,8 +63,11 @@ class ExpressionError(ValueError):
     """Raised for expressions that cannot be parsed or evaluated."""
 
 
-def parse(text: str | int | float, variables: Sequence[str] = (), evaluate: bool = True) -> sp.Expr:
+def parse(text: str | int | float, variables: Sequence[str] = (), evaluate: bool = True,
+          namespace: dict | None = None) -> sp.Expr:
     """Parse ``text`` into a SymPy expression (safely; no arbitrary code).
+
+    ``namespace`` adds names (user functions as ``Lambda``, parameter values...).
 
     ``evaluate=False`` keeps the expression exactly as written (``(x+1)(x+1)^2``
     is not collapsed into ``(x+1)^3``); use it for display.
@@ -74,6 +79,8 @@ def parse(text: str | int | float, variables: Sequence[str] = (), evaluate: bool
     if _FORBIDDEN.search(text):
         raise ExpressionError(f"Expression {text!r} contains forbidden syntax.")
     local = dict(_ALLOWED)
+    if namespace:
+        local.update(namespace)
     for v in variables:
         local[v] = sp.Symbol(v, real=True)
     # Every free name is a real symbol (also inside implicit products like "2x";
@@ -91,15 +98,21 @@ def parse(text: str | int | float, variables: Sequence[str] = (), evaluate: bool
     return expr
 
 
+def is_reserved(name: str) -> bool:
+    """Names that cannot be used for user objects (functions, constants, variables)."""
+    return name in _ALLOWED or name in ("x", "y", "z", "t", "theta")
+
+
 _EQ = re.compile(r"(?<![<>!=])=(?!=)")
 
 
-def parse_equation(text: str, evaluate: bool = True) -> sp.Basic:
+def parse_equation(text: str, evaluate: bool = True, namespace: dict | None = None) -> sp.Basic:
     """Parse ``'lhs = rhs'`` into ``Eq(lhs, rhs)``; plain expressions are returned as-is."""
     if isinstance(text, str) and _EQ.search(text):
         lhs, rhs = _EQ.split(text, maxsplit=1)
-        return sp.Eq(parse(lhs, evaluate=evaluate), parse(rhs, evaluate=evaluate), evaluate=False)
-    return parse(text, evaluate=evaluate)
+        return sp.Eq(parse(lhs, evaluate=evaluate, namespace=namespace),
+                     parse(rhs, evaluate=evaluate, namespace=namespace), evaluate=False)
+    return parse(text, evaluate=evaluate, namespace=namespace)
 
 
 def _tidy(e: sp.Basic) -> sp.Basic:

@@ -17,6 +17,7 @@ class InProcessTransport:
     def __init__(self, addon):
         self.addon = addon
         self.log = []
+        self.timeout = 300
 
     def send(self, command, params=None):
         request = json.loads(json.dumps({"type": command, "params": params or {}}))
@@ -40,6 +41,8 @@ def bpy_addon():
 
 @pytest.fixture
 def studio(bpy_addon):
-    from blender_math_mcp.studio import MathStudio
+    from blender_math_mcp.studio import Studio
 
-    return MathStudio(InProcessTransport(bpy_addon))
+    s = Studio(InProcessTransport(bpy_addon), backend="mathtext")
+    s.setup_scene("2d", engine="cycles", resolution=[320, 180])
+    return s

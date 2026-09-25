@@ -35,15 +35,49 @@ class TypesetError(ValueError):
     """Raised when a formula cannot be typeset."""
 
 
+def _tx_points(pts, dx, dy, scale):
+    return [[round(p[0] * scale + dx, _ROUND), round(p[1] * scale + dy, _ROUND), 0.0] for p in pts]
+
+
+def _tx_splines(splines, dx, dy, scale):
+    return [
+        {"co": _tx_points(s["co"], dx, dy, scale), "hl": _tx_points(s["hl"], dx, dy, scale),
+         "hr": _tx_points(s["hr"], dx, dy, scale), "cyclic": s["cyclic"]}
+        for s in splines
+    ]
+
+
+@dataclass
+class Glyph:
+    """One glyph (or rule such as a fraction bar) of a typeset formula.
+
+    ``key`` identifies the shape (font + character, or rule size), so equal keys
+    are the same symbol -- used to match terms when morphing equations.
+    """
+
+    key: str
+    splines: list[dict]
+    bbox: tuple[float, float, float, float]
+
+    def transformed(self, dx: float, dy: float, scale: float) -> "Glyph":
+        x0, y0, x1, y1 = self.bbox
+        return Glyph(self.key, _tx_splines(self.splines, dx, dy, scale),
+                     (x0 * scale + dx, y0 * scale + dy, x1 * scale + dx, y1 * scale + dy))
+
+
 @dataclass
 class Typeset:
     """Outlines of a typeset formula, in em units scaled by ``size``."""
 
-    splines: list[dict]
+    glyphs: list[Glyph]
     bbox: tuple[float, float, float, float]  # xmin, ymin, xmax, ymax (baseline at y=0)
     backend: str
     source: str
     notes: list[str] = field(default_factory=list)
+
+    @property
+    def splines(self) -> list[dict]:
+        return [s for g in self.glyphs for s in g.splines]
 
     @property
     def width(self) -> float:
@@ -55,17 +89,10 @@ class Typeset:
 
     def transformed(self, dx: float = 0.0, dy: float = 0.0, scale: float = 1.0) -> "Typeset":
         """Return a copy scaled about the origin and then translated."""
-
-        def tx(pts):
-            return [[round(p[0] * scale + dx, _ROUND), round(p[1] * scale + dy, _ROUND), 0.0] for p in pts]
-
-        splines = [
-            {"co": tx(s["co"]), "hl": tx(s["hl"]), "hr": tx(s["hr"]), "cyclic": s["cyclic"]}
-            for s in self.splines
-        ]
         x0, y0, x1, y1 = self.bbox
         bbox = (x0 * scale + dx, y0 * scale + dy, x1 * scale + dx, y1 * scale + dy)
-        return Typeset(splines, bbox, self.backend, self.source, list(self.notes))
+        return Typeset([g.transformed(dx, dy, scale) for g in self.glyphs], bbox, self.backend, self.source,
+                       list(self.notes))
 
 
 @functools.lru_cache(maxsize=1)
@@ -140,27 +167,28 @@ def _tex_at_design_size():
         textpath.TexManager = original
 
 
-def _glyph_path(source: str, backend: str, preamble: str) -> tuple[np.ndarray, np.ndarray]:
-    """Outline vertices and path codes in em units (baseline at y = 0)."""
+def _glyphs(source: str, backend: str, preamble: str) -> list[tuple[str, np.ndarray, np.ndarray]]:
+    """``(key, vertices, codes)`` per glyph and rule, in em units (baseline at y = 0)."""
     import matplotlib
 
     matplotlib.use("Agg", force=False)
     from matplotlib.font_manager import FontProperties
-    from matplotlib.textpath import TextPath, text_to_path
+    from matplotlib.textpath import text_to_path
 
     try:
         if backend == "latex":
             rc = {"text.usetex": True, "text.latex.preamble": preamble}
             with matplotlib.rc_context(rc), _tex_at_design_size():
-                verts, codes = text_to_path.get_text_path(FontProperties(family="serif"), source, ismath="TeX")
-            # DVI positions are in pt for a 10pt font; the glyphs are scaled to
-            # match (text.font_size / FONT_SCALE), so dividing by 10 gives ems.
-            return np.asarray(verts, float) / _TEX_PT, np.asarray(codes)
-        rc = {"mathtext.fontset": "cm", "mathtext.rm": "serif"}
-        with matplotlib.rc_context(rc):
-            prop = FontProperties(family="serif", math_fontfamily="cm")
-            path = TextPath((0, 0), source, size=1.0, prop=prop)  # size=1 -> em units
-        return np.asarray(path.vertices, float), np.asarray(path.codes)
+                info, gmap, rects = text_to_path.get_glyphs_tex(FontProperties(family="serif"), source)
+            # DVI positions are in pt for a 10pt font; glyph outlines are scaled to
+            # match (font_size / FONT_SCALE), so dividing by 10 gives ems.
+            unit = float(_TEX_PT)
+        else:
+            rc = {"mathtext.fontset": "cm", "mathtext.rm": "serif"}
+            with matplotlib.rc_context(rc):
+                prop = FontProperties(family="serif", math_fontfamily="cm")
+                info, gmap, rects = text_to_path.get_glyphs_mathtext(prop, source)
+            unit = float(text_to_path.FONT_SCALE)  # mathtext works at FONT_SCALE pt
     except Exception as exc:  # parse errors, LaTeX errors, missing fonts
         msg = str(exc).strip()
         if backend == "mathtext":
@@ -169,6 +197,18 @@ def _glyph_path(source: str, backend: str, preamble: str) -> tuple[np.ndarray, n
                 "matrix/aligned/cases or \\text; install LaTeX to enable the 'latex' backend.)"
             )
         raise TypesetError(f"Could not typeset {source!r} with {backend}: {msg}") from exc
+
+    out = []
+    for key, x, y, scale in info:
+        verts, codes = gmap[key]
+        v = (np.asarray(verts, float) * scale + [x, y]) / unit
+        out.append((f"{key}@{scale:.4f}", v, np.asarray(codes)))
+    for verts, codes in rects:
+        v = np.asarray(verts, float) / unit
+        real = v[:-1]
+        w, h = np.ptp(real[:, 0]), np.ptp(real[:, 1])
+        out.append((f"rule:{w:.3f}x{h:.3f}", v, np.asarray(codes)))
+    return out
 
 
 def _path_to_contours(vertices: np.ndarray, codes: np.ndarray) -> list[list[tuple]]:
@@ -244,29 +284,36 @@ def typeset(
         raise TypesetError("Empty formula.")
     used = resolve_backend(backend)
     source = _prepare_source(tex, mode, used)
-    verts, codes = _glyph_path(source, used, preamble or DEFAULT_PREAMBLE)
-    if len(verts) == 0:
+    glyphs = []
+    for key, verts, codes in _glyphs(source, used, preamble or DEFAULT_PREAMBLE):
+        splines = [sp_ for sp_ in (_contour_to_spline(c) for c in _path_to_contours(verts, codes))
+                   if sp_ and len(sp_["co"]) >= 2]
+        if not splines:
+            continue
+        real = verts[codes != CLOSEPOLY]
+        glyphs.append(Glyph(key, splines, (float(real[:, 0].min()), float(real[:, 1].min()),
+                                           float(real[:, 0].max()), float(real[:, 1].max()))))
+    if not glyphs:
         raise TypesetError(f"{tex!r} produced no visible glyphs.")
-    contours = _path_to_contours(verts, codes)
-    splines = [s for s in (_contour_to_spline(c) for c in contours) if s and len(s["co"]) >= 2]
-    real = verts[codes != CLOSEPOLY]
-    xmin, ymin = real.min(axis=0)
-    xmax, ymax = real.max(axis=0)
-    return Typeset(splines, (float(xmin), float(ymin), float(xmax), float(ymax)), used, tex)
+    # Reading order (left to right, then top to bottom) makes glyph matching stable.
+    glyphs.sort(key=lambda g: (round(g.bbox[0], 3), -g.bbox[3]))
+    bbox = (min(g.bbox[0] for g in glyphs), min(g.bbox[1] for g in glyphs),
+            max(g.bbox[2] for g in glyphs), max(g.bbox[3] for g in glyphs))
+    return Typeset(glyphs, bbox, used, tex)
 
 
 def merge(parts: list[Typeset]) -> Typeset:
     """Combine already-positioned typeset pieces into one."""
     if not parts:
         raise TypesetError("Nothing to merge.")
-    splines = [s for p in parts for s in p.splines]
     bbox = (
         min(p.bbox[0] for p in parts),
         min(p.bbox[1] for p in parts),
         max(p.bbox[2] for p in parts),
         max(p.bbox[3] for p in parts),
     )
-    return Typeset(splines, bbox, parts[0].backend, "\n".join(p.source for p in parts))
+    return Typeset([g for p in parts for g in p.glyphs], bbox, parts[0].backend,
+                   "\n".join(p.source for p in parts))
 
 
 ANCHORS_X = {"left": 0.0, "center": 0.5, "right": 1.0}

@@ -13,8 +13,8 @@ Protocol: one JSON object per line.
 bl_info = {
     "name": "Blender Math Bridge (MCP)",
     "author": "Blender-Math contributors",
-    "version": (0, 1, 0),
-    "blender": (3, 6, 0),
+    "version": (0, 2, 0),
+    "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Math MCP",
     "description": "Lets an AI (via the blender-math MCP server) typeset LaTeX and draw exact math in Blender",
     "category": "Interface",
@@ -143,16 +143,52 @@ def _material(name, spec):
     if color_socket_src is not None:
         nt.links.new(color_socket_src, cin)
     last = shader.outputs[0]
+    # Every material ends in a mix with transparency (node "MathAlpha", Fac = opacity)
+    # so any object can be faded in/out by keyframing one value.
     alpha = float(color[3])
-    if alpha < 1.0:
-        transp = nt.nodes.new("ShaderNodeBsdfTransparent")
-        mix = nt.nodes.new("ShaderNodeMixShader")
-        mix.inputs["Fac"].default_value = alpha
-        nt.links.new(transp.outputs[0], mix.inputs[1])
-        nt.links.new(last, mix.inputs[2])
-        last = mix.outputs[0]
-        _set_blend(mat, alpha)
-    nt.links.new(last, out.inputs["Surface"])
+    transp = nt.nodes.new("ShaderNodeBsdfTransparent")
+    mix = nt.nodes.new("ShaderNodeMixShader")
+    mix.name = mix.label = "MathAlpha"
+    mix.inputs["Fac"].default_value = alpha
+    nt.links.new(transp.outputs[0], mix.inputs[1])
+    nt.links.new(last, mix.inputs[2])
+    _set_blend(mat, alpha)
+    final = mix.outputs[0]
+    box = spec.get("clip_box")  # [xmin, xmax, ymin, ymax] in object space: hide outside
+    if box:
+        tc = nt.nodes.new("ShaderNodeTexCoord")
+        sep = nt.nodes.new("ShaderNodeSeparateXYZ")
+        nt.links.new(tc.outputs["Object"], sep.inputs[0])
+        mask = None
+        for axis, lo, hi in (("X", box[0], box[1]), ("Y", box[2], box[3])):
+            gt = nt.nodes.new("ShaderNodeMath")
+            gt.operation = "GREATER_THAN"
+            nt.links.new(sep.outputs[axis], gt.inputs[0])
+            gt.inputs[1].default_value = float(lo)
+            lt = nt.nodes.new("ShaderNodeMath")
+            lt.operation = "LESS_THAN"
+            nt.links.new(sep.outputs[axis], lt.inputs[0])
+            lt.inputs[1].default_value = float(hi)
+            both = nt.nodes.new("ShaderNodeMath")
+            both.operation = "MULTIPLY"
+            nt.links.new(gt.outputs[0], both.inputs[0])
+            nt.links.new(lt.outputs[0], both.inputs[1])
+            if mask is None:
+                mask = both
+            else:
+                m2 = nt.nodes.new("ShaderNodeMath")
+                m2.operation = "MULTIPLY"
+                nt.links.new(mask.outputs[0], m2.inputs[0])
+                nt.links.new(both.outputs[0], m2.inputs[1])
+                mask = m2
+        transp2 = nt.nodes.new("ShaderNodeBsdfTransparent")
+        mix2 = nt.nodes.new("ShaderNodeMixShader")
+        mix2.name = "MathMask"
+        nt.links.new(mask.outputs[0], mix2.inputs["Fac"])
+        nt.links.new(transp2.outputs[0], mix2.inputs[1])
+        nt.links.new(final, mix2.inputs[2])
+        final = mix2.outputs[0]
+    nt.links.new(final, out.inputs["Surface"])
     return mat
 
 
@@ -327,11 +363,19 @@ def _delete(obj, recursive=True):
 
 
 def cmd_delete(params):
+    """Delete by names (missing names are ignored), by node (metadata), or all math objects."""
     removed = []
     if params.get("all_math"):
         targets = _math_objects()
     else:
-        targets = [_get_obj(n) for n in params.get("names", [])]
+        targets = [bpy.data.objects[n] for n in params.get("names", []) if n in bpy.data.objects]
+        node = params.get("node")
+        if node:
+            for o in bpy.data.objects:
+                if META_KEY in o:
+                    with contextlib.suppress(Exception):
+                        if json.loads(o[META_KEY]).get("node") == node:
+                            targets.append(o)
     names = {o.name for o in targets}
     for name in sorted(names):
         obj = bpy.data.objects.get(name)
@@ -509,6 +553,11 @@ def cmd_frame(params):
     lo, hi = _bbox(objs)
     margin = float(params.get("margin", 0.08))
     center = (lo + hi) / 2
+    if params.get("center") is not None:
+        # keep a fixed point (e.g. the math origin) at the center of the view
+        c = mathutils.Vector(params["center"])
+        half = mathutils.Vector([max(abs(lo[i] - c[i]), abs(hi[i] - c[i])) for i in range(3)])
+        lo, hi, center = c - half, c + half, c
     size = hi - lo
     aspect = scene.render.resolution_x / scene.render.resolution_y
     if cam.data.type == "ORTHO":
@@ -536,7 +585,12 @@ def cmd_frame(params):
                     c = inv @ (mathutils.Vector((cx, cy, cz)) - center)  # camera-space offset
                     dist = max(dist, abs(c.x) / tx + c.z, abs(c.y) / ty + c.z)
         cam.location = center - forward * max(dist, cam.data.clip_start * 2)
-    return {"center": list(center), "size": list(size), "camera": cam.name}
+    out = {"center": list(center), "size": list(size), "camera": cam.name, "aspect": aspect}
+    if cam.data.type == "ORTHO":
+        w = cam.data.ortho_scale
+        out["view_box"] = [cam.location.x - w / 2, cam.location.y - w / aspect / 2,
+                           cam.location.x + w / 2, cam.location.y + w / aspect / 2]
+    return out
 
 
 def cmd_render(params):
@@ -556,6 +610,8 @@ def cmd_render(params):
             r.resolution_percentage = 100
         if params.get("engine"):
             _set_engine(scene, params["engine"])
+        if params.get("frame") is not None:
+            scene.frame_set(int(params["frame"]))
         if r.engine == "CYCLES" and params.get("samples"):
             scene.cycles.samples = int(params["samples"])
         elif params.get("samples") and hasattr(scene, "eevee"):
@@ -587,7 +643,308 @@ def cmd_execute_code(params):
     return {"stdout": buf.getvalue()}
 
 
+# =============================================================================== storage / bounds
+
+
+STORE_KEY = "math_construction"
+
+
+def cmd_store(params):
+    """Persist (or read back) the MCP server's construction graph inside the .blend file."""
+    scene = bpy.context.scene
+    if "data" in params:
+        scene[STORE_KEY] = json.dumps(params["data"])
+        return {"stored": True}
+    raw = scene.get(STORE_KEY)
+    return {"data": json.loads(raw) if raw else None}
+
+
+def cmd_bounds(params):
+    """World-space bounding boxes and centers of objects (children included)."""
+    out = {}
+    for n in params.get("names", []):
+        obj = _get_obj(n)
+        objs = [obj] + list(obj.children_recursive)
+        try:
+            lo, hi = _bbox(objs)
+        except ValueError:
+            loc = obj.matrix_world.translation
+            lo = hi = loc
+        out[n] = {"min": list(lo), "max": list(hi), "center": list((lo + hi) / 2), "size": list(hi - lo)}
+    return out
+
+
+# =============================================================================== animation
+
+
+def _alpha_sockets(obj, include_children=True):
+    objs = [obj] + (list(obj.children_recursive) if include_children else [])
+    for o in objs:
+        for slot in getattr(o, "material_slots", []):
+            m = slot.material
+            if m and m.use_nodes and "MathAlpha" in m.node_tree.nodes:
+                yield m, m.node_tree.nodes["MathAlpha"].inputs["Fac"]
+
+
+@contextlib.contextmanager
+def _interpolation(kind):
+    edit = bpy.context.preferences.edit
+    old = edit.keyframe_new_interpolation_type
+    edit.keyframe_new_interpolation_type = kind
+    try:
+        yield
+    finally:
+        edit.keyframe_new_interpolation_type = old
+
+
+def _resolve(obj, path):
+    owner = obj
+    parts = path.split(".")
+    for p in parts[:-1]:
+        owner = getattr(owner, p)
+    return owner, parts[-1]
+
+
+def _set_value(owner, prop, index, value):
+    if index is None or index < 0:
+        if isinstance(value, (list, tuple)):
+            setattr(owner, prop, value)
+        else:
+            setattr(owner, prop, value)
+    else:
+        getattr(owner, prop)[index] = value
+
+
+def cmd_keyframes(params):
+    """Insert keyframes.  items: [{object, path, keys: [[frame, value], ...], index, interpolation,
+    include_children}].  Special paths: 'alpha' (material opacity), 'visible' (hide keys),
+    'shape:<name>' (shape key value), 'shape_eval_time'."""
+    count = 0
+    for it in params.get("items", []):
+        obj = _get_obj(it["object"])
+        path = it["path"]
+        index = it.get("index")
+        interp = it.get("interpolation", "BEZIER")
+        with _interpolation("CONSTANT" if path == "visible" else interp):
+            for frame, value in it["keys"]:
+                frame = float(frame)
+                if path == "alpha":
+                    for _m, sock in _alpha_sockets(obj, it.get("include_children", True)):
+                        sock.default_value = float(value)
+                        sock.keyframe_insert("default_value", frame=frame)
+                elif path == "visible":
+                    targets = [obj] + (list(obj.children_recursive) if it.get("include_children", True) else [])
+                    for o in targets:
+                        o.hide_render = not bool(value)
+                        o.hide_viewport = not bool(value)
+                        o.keyframe_insert("hide_render", frame=frame)
+                        o.keyframe_insert("hide_viewport", frame=frame)
+                elif path.startswith("shape:"):
+                    kb = obj.data.shape_keys.key_blocks[path[6:]]
+                    kb.value = float(value)
+                    kb.keyframe_insert("value", frame=frame)
+                elif path == "shape_eval_time":
+                    key = obj.data.shape_keys
+                    key.eval_time = float(value)
+                    key.keyframe_insert("eval_time", frame=frame)
+                else:
+                    owner, prop = _resolve(obj, path)
+                    _set_value(owner, prop, index, value)
+                    if index is None or index < 0:
+                        owner.keyframe_insert(prop, frame=frame)
+                    else:
+                        owner.keyframe_insert(prop, index=index, frame=frame)
+                count += 1
+    return {"keyframes": count}
+
+
+def cmd_shape_keys(params):
+    """Add shape keys to a curve or mesh.  keys: [{name, co, hl?, hr?}] with one entry per point
+    (curves: bezier points / poly points in spline order; meshes: vertices).
+    relative=False makes absolute keys driven by eval_time (key i at eval_time 10*i)."""
+    obj = _get_obj(params["object"])
+    data = obj.data
+    if data.shape_keys is None:
+        obj.shape_key_add(name="Basis", from_mix=False)
+    data.shape_keys.use_relative = bool(params.get("relative", True))
+    for k in params["keys"]:
+        kb = obj.shape_key_add(name=k["name"], from_mix=False)
+        co = k["co"]
+        if isinstance(data, bpy.types.Curve):
+            for i, pt in enumerate(kb.data):
+                pt.co = co[i]
+                if hasattr(pt, "handle_left") and "hl" in k:
+                    pt.handle_left = k["hl"][i]
+                    pt.handle_right = k["hr"][i]
+        else:
+            flat = [c for v in co for c in v]
+            kb.data.foreach_set("co", flat)
+    return {"object": obj.name, "keys": [kb.name for kb in data.shape_keys.key_blocks]}
+
+
+def cmd_timeline(params):
+    scene = bpy.context.scene
+    if "fps" in params:
+        scene.render.fps = int(params["fps"])
+        scene.render.fps_base = 1.0
+    if "frame_start" in params:
+        scene.frame_start = int(params["frame_start"])
+    if "frame_end" in params:
+        scene.frame_end = int(params["frame_end"])
+    if "frame" in params:
+        scene.frame_set(int(params["frame"]))
+    return {"fps": scene.render.fps, "frame_start": scene.frame_start, "frame_end": scene.frame_end,
+            "frame": scene.frame_current}
+
+
+def cmd_camera_pivot(params):
+    """Parent the camera to an empty at ``center`` (for orbits); returns the pivot name."""
+    scene = bpy.context.scene
+    cam = scene.camera
+    if cam is None:
+        raise ValueError("No camera; call setup_scene first")
+    piv = bpy.data.objects.get("MathCameraPivot")
+    if piv is None:
+        piv = bpy.data.objects.new("MathCameraPivot", None)
+        scene.collection.objects.link(piv)
+    world = cam.matrix_world.copy()
+    piv.location = params.get("center", [0, 0, 0])
+    piv.rotation_euler = (0, 0, 0)
+    bpy.context.view_layer.update()
+    cam.parent = piv
+    cam.matrix_parent_inverse = piv.matrix_world.inverted()
+    cam.matrix_world = world
+    return {"pivot": piv.name, "camera": cam.name}
+
+
+def cmd_render_animation(params):
+    """Render the frame range to a video (MP4/H.264) or a PNG sequence."""
+    scene = bpy.context.scene
+    if scene.camera is None:
+        raise ValueError("No camera; call setup_scene first")
+    r = scene.render
+    path = params["filepath"]
+    os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
+    res = params.get("resolution")
+    if res:
+        r.resolution_x, r.resolution_y = int(res[0]), int(res[1])
+        r.resolution_percentage = 100
+    if params.get("engine"):
+        _set_engine(scene, params["engine"])
+    if params.get("samples"):
+        if r.engine == "CYCLES":
+            scene.cycles.samples = int(params["samples"])
+        else:
+            with contextlib.suppress(AttributeError):
+                scene.eevee.taa_render_samples = int(params["samples"])
+    for k in ("frame_start", "frame_end"):
+        if params.get(k) is not None:
+            setattr(scene, k, int(params[k]))
+    fmt = params.get("format", "mp4")
+    ims = r.image_settings
+    if fmt == "mp4":
+        if hasattr(ims, "media_type"):  # Blender 5.x
+            ims.media_type = "VIDEO"
+        ims.file_format = "FFMPEG"
+        r.ffmpeg.format = "MPEG4"
+        r.ffmpeg.codec = "H264"
+        with contextlib.suppress(TypeError, AttributeError):
+            r.ffmpeg.constant_rate_factor = "HIGH"
+        r.filepath = path
+    else:
+        if hasattr(ims, "media_type"):
+            ims.media_type = "IMAGE"
+        ims.file_format = "PNG"
+        r.filepath = os.path.join(path, "frame_")
+    bpy.ops.render.render(animation=True)
+    return {"filepath": path, "frames": [scene.frame_start, scene.frame_end], "fps": r.fps,
+            "format": fmt}
+
+
+def cmd_describe_objects(params):
+    """Type information used to choose animations (draw-on for tubes, fades for fills ...)."""
+    out = {}
+    for n in params.get("names", []):
+        o = bpy.data.objects.get(n)
+        if o is None:
+            continue
+        info = {"type": o.type, "location": list(o.location), "scale": list(o.scale),
+                "parent": o.parent.name if o.parent else None}
+        if o.type == "CURVE":
+            info["filled"] = o.data.dimensions == "2D" and o.data.fill_mode != "NONE"
+            info["bevel"] = o.data.bevel_depth
+            info["splines"] = len(o.data.splines)
+        out[n] = info
+    return out
+
+
+def cmd_stroke_copy(params):
+    """Duplicate a filled glyph curve as an outline tube (for handwriting-style 'write' animations)."""
+    src = _get_obj(params["name"])
+    new_name = params["new_name"]
+    old = bpy.data.objects.get(new_name)
+    if old is not None:
+        _delete(old)
+    data = src.data.copy()
+    data.fill_mode = "NONE"
+    data.bevel_depth = float(params.get("bevel_depth", 0.01))
+    data.bevel_resolution = 2
+    obj = bpy.data.objects.new(new_name, data)
+    for c in src.users_collection:
+        c.objects.link(obj)
+    obj.parent = src.parent
+    obj.matrix_parent_inverse = src.matrix_parent_inverse.copy()
+    obj.location = src.location
+    obj.rotation_euler = src.rotation_euler
+    obj.scale = src.scale
+    obj.location.z += float(params.get("z_offset", 0.001))
+    obj[META_KEY] = json.dumps({"node": params.get("node", "anim"), "part": "stroke", "anim_helper": True})
+    _assign_material(obj, params.get("material"))
+    return _obj_summary(obj)
+
+
+def cmd_clear_animation(params):
+    """Remove all keyframes from math objects (and their data/materials/shape keys) and delete helpers."""
+    removed = 0
+    for o in list(_math_objects()):
+        meta = {}
+        with contextlib.suppress(Exception):
+            meta = json.loads(o.get(META_KEY, "{}"))
+        if meta.get("anim_helper"):
+            _delete(o)
+            removed += 1
+            continue
+        o.animation_data_clear()
+        o.hide_render = o.hide_viewport = False
+        if o.data is not None and hasattr(o.data, "animation_data_clear"):
+            o.data.animation_data_clear()
+            sk = getattr(o.data, "shape_keys", None)
+            if sk is not None:
+                sk.animation_data_clear()
+        for m, sock in _alpha_sockets(o, False):
+            if m.node_tree:
+                m.node_tree.animation_data_clear()
+    cam = bpy.context.scene.camera
+    if cam is not None:
+        cam.animation_data_clear()
+        cam.data.animation_data_clear()
+    piv = bpy.data.objects.get("MathCameraPivot")
+    if piv is not None:
+        piv.animation_data_clear()
+    return {"removed_helpers": removed}
+
+
 COMMANDS = {
+    "describe_objects": cmd_describe_objects,
+    "stroke_copy": cmd_stroke_copy,
+    "clear_animation": cmd_clear_animation,
+    "store": cmd_store,
+    "bounds": cmd_bounds,
+    "keyframes": cmd_keyframes,
+    "shape_keys": cmd_shape_keys,
+    "timeline": cmd_timeline,
+    "camera_pivot": cmd_camera_pivot,
+    "render_animation": cmd_render_animation,
     "ping": cmd_ping,
     "create_curve": cmd_create_curve,
     "create_mesh": cmd_create_mesh,
@@ -709,8 +1066,8 @@ class BridgeServer:
             except queue.Empty:
                 return
             box["response"] = dispatch(request)
-            if box["response"]["status"] == "ok" and request.get("type") not in ("ping", "get_scene_info",
-                                                                                  "get_object", "render"):
+            if box["response"]["status"] == "ok" and request.get("type") not in (
+                    "ping", "get_scene_info", "get_object", "render", "bounds", "store", "render_animation"):
                 with contextlib.suppress(Exception):
                     bpy.ops.ed.undo_push(message=f"Math: {request.get('type')}")
             done.set()

@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "blender_math_bridge"
-version = "0.1.0"
+version = "0.2.0"
 name = "Blender Math Bridge (MCP)"
 tagline = "Lets an AI typeset LaTeX and draw exact math through MCP"
 maintainer = "Blender-Math contributors"
